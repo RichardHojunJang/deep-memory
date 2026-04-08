@@ -13,11 +13,13 @@ def recall(query: str, entity: str | None = None, limit: int = 10, task_id: str 
     Returns ranked conclusions as JSON.
     """
     from deep_memory.store import DeepMemoryDB, hybrid_search
+    from deep_memory.store.db import get_embedder
 
     db = DeepMemoryDB()
     try:
-        # TODO: generate query embedding for vector search when embedding model is configured
-        query_embedding = None
+        # Generate query embedding for vector search
+        embedder = get_embedder()
+        query_embedding = embedder.embed(query)
 
         results = hybrid_search(
             db.conn,
