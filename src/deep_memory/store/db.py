@@ -6,12 +6,39 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any, Generator, Optional
 
 from .schema import init_schema, get_schema_version, SCHEMA_VERSION
 
 
 DEFAULT_DB_PATH = Path.home() / ".hermes" / "deep_memory" / "memory.db"
+
+# Global embedder instance (lazy-loaded)
+_embedder = None
+
+
+def get_embedder():
+    """Get or create the global embedder instance."""
+    global _embedder
+    if _embedder is None:
+        from deep_memory.embedding import get_embedder as _get_emb
+        # Try to read config for backend preference
+        backend = "none"
+        try:
+            import os, yaml
+            config_path = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")) / "config.yaml"
+            if config_path.exists():
+                with open(config_path) as f:
+                    cfg = yaml.safe_load(f) or {}
+                backend = cfg.get("deep_memory", {}).get("embedding_backend", "none")
+        except Exception:
+            pass
+        try:
+            _embedder = _get_emb(backend)
+        except Exception:
+            from deep_memory.embedding import NoopEmbedder
+            _embedder = NoopEmbedder()
+    return _embedder
 
 
 class DeepMemoryDB:
@@ -125,6 +152,11 @@ class DeepMemoryDB:
         source_sessions: list[str] | None = None,
         embedding: bytes | None = None,
     ) -> int:
+        # Auto-generate embedding if not provided
+        if embedding is None:
+            embedder = get_embedder()
+            embedding = embedder.embed(content)
+
         with self.transaction() as conn:
             cur = conn.execute(
                 """INSERT INTO conclusions
@@ -140,7 +172,19 @@ class DeepMemoryDB:
                     embedding,
                 ),
             )
-            return cur.lastrowid
+            conclusion_id = cur.lastrowid
+
+            # Insert into vec table if available and embedding exists
+            if embedding:
+                try:
+                    conn.execute(
+                        "INSERT INTO conclusions_vec(rowid, embedding) VALUES (?, ?)",
+                        (conclusion_id, embedding),
+                    )
+                except Exception:
+                    pass  # vec table may not exist
+
+            return conclusion_id
 
     def get_conclusions(
         self,
