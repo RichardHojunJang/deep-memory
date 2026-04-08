@@ -40,27 +40,71 @@ src/deep_memory/
 | `conclusions` | Structured insights with embeddings | Representations |
 | `summaries` | Compressed session digests | Session summaries |
 
+## Installation
+
+### As a Hermes Agent plugin
+
+```bash
+# Install into Hermes's venv
+source ~/.hermes/hermes-agent/venv/bin/activate
+pip install -e /path/to/deep-memory
+
+# Add to Hermes model_tools.py _discover_tools():
+#   try:
+#       import deep_memory.hermes_integration
+#   except ImportError:
+#       pass
+
+# Add to Hermes toolsets.py _HERMES_CORE_TOOLS:
+#   "recall", "learn", "entities",
+```
+
+### Standalone
+
+```bash
+pip install -e ".[dev]"
+```
+
+### Optional: Embedding backends
+
+```bash
+# Local embeddings (no API calls)
+pip install sentence-transformers
+
+# Or use OpenAI embeddings (requires OPENAI_API_KEY)
+# Configure in ~/.hermes/config.yaml:
+#   deep_memory:
+#     embedding_backend: openai
+```
+
+## Usage
+
+Once installed, three new tools are available in Hermes:
+
+- **`recall`** — Search deep memory for insights: `recall(query="Python preferences", entity="Richard")`
+- **`learn`** — Store insights: `learn(entity="Richard", insight="Prefers SQLite", type="explicit")`  
+- **`entities`** — Manage profiles: `entities(action="get", name="Richard")`
+
+Post-session reasoning runs automatically via `session_hook.py`, extracting structured conclusions from conversations.
+
 ## Development
 
 ```bash
-# Setup
-uv venv && source .venv/bin/activate
-uv pip install -e ".[dev]"
-
-# Tests
-pytest tests/ -q
-
-# Lint
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+pytest tests/ -q   # 60 tests
 ruff check src/
 ```
 
-## Roadmap
+## Status
 
-- [ ] Phase 1: SQLite store + recall/learn tools
-- [ ] Phase 2: Post-session reasoning hook
-- [ ] Phase 3: Entity cards + system prompt injection
-- [ ] Phase 4: Contradiction detection + conclusion consolidation
-- [ ] Phase 5: Tests + polish + Hermes integration
+- [x] Phase 1: SQLite store + recall/learn tools
+- [x] Phase 2: Reasoning pipeline (extract/consolidate)
+- [x] Phase 3: Entity cards + system prompt injection
+- [x] Phase 4: Hermes integration (tool registry + session hook)
+- [x] Phase 5: Tests + polish (60 tests passing)
+- [ ] Phase 6: Embedding model auto-config
+- [ ] Phase 7: Hermes PR submission
 
 ## License
 
