@@ -2,7 +2,7 @@
 
 import sqlite3
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -52,7 +52,7 @@ FTS_SQL = """
 CREATE VIRTUAL TABLE IF NOT EXISTS conclusions_fts USING fts5(
     content,
     type,
-    content_rowid='id',
+    content='',
     tokenize='porter unicode61'
 );
 """

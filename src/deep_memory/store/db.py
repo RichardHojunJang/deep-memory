@@ -96,6 +96,8 @@ class DeepMemoryDB:
 
     def delete_entity(self, entity_id: str) -> bool:
         with self.transaction() as conn:
+            # Delete conclusions first (triggers clean up FTS)
+            conn.execute("DELETE FROM conclusions WHERE entity_id = ?", (entity_id,))
             cur = conn.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
             return cur.rowcount > 0
 
