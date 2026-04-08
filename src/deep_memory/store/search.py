@@ -45,9 +45,15 @@ def fts_search(
     limit: int = 20,
 ) -> list[SearchResult]:
     """Full-text search using FTS5 BM25 ranking."""
-    # Escape FTS5 special chars
-    safe_query = query.replace('"', '""')
-    fts_expr = f'"{safe_query}"'
+    # Tokenize query into OR terms for FTS5
+    words = query.split()
+    if len(words) == 1:
+        safe_query = words[0].replace('"', '""')
+        fts_expr = f'"{safe_query}"'
+    else:
+        # Join with OR so any matching term returns results
+        safe_parts = [w.replace('"', '""') for w in words]
+        fts_expr = " OR ".join(f'"{p}"' for p in safe_parts)
 
     sql = """
         SELECT c.id, c.entity_id, c.content, c.type, c.confidence,
