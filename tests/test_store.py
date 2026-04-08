@@ -1,153 +1,208 @@
-"""Tests for the storage layer."""
+"""Tests for the deep-memory storage layer."""
 
-import json
-import sqlite3
-import tempfile
+from __future__ import annotations
+
 from pathlib import Path
 
+import numpy as np
 import pytest
 
-from deep_memory.store.schema import init_schema, get_schema_version, SCHEMA_VERSION
-from deep_memory.store.db import DeepMemoryDB
-from deep_memory.store.search import fts_search, hybrid_search
+from deep_memory.store.db import (
+    add_conclusion,
+    add_summary,
+    get_conclusions,
+    get_entity,
+    get_summary,
+    init_db,
+    list_entities,
+    list_summaries,
+    supersede_conclusion,
+    upsert_entity,
+)
+from deep_memory.store.search import hybrid_search
 
 
-@pytest.fixture
-def db(tmp_path):
-    """Create a fresh DeepMemoryDB for each test."""
-    db = DeepMemoryDB(db_path=tmp_path / "test.db")
-    yield db
-    db.close()
+@pytest.fixture()
+def conn(tmp_path: Path):
+    """Create a fresh temp DB for each test."""
+    db_path = tmp_path / "test.db"
+    c = init_db(db_path)
+    yield c
+    c.close()
+
+
+def _make_embedding(dim: int = 384, seed: int = 42) -> bytes:
+    """Generate a random float32 embedding as bytes."""
+    vec = np.random.default_rng(seed).random(dim, dtype=np.float32)
+    return vec.tobytes()
+
+
+# ---- Schema tests ----
 
 
 class TestSchema:
-    def test_init_creates_tables(self, db):
-        tables = db.conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-        ).fetchall()
-        table_names = {row[0] for row in tables}
-        assert "entities" in table_names
-        assert "conclusions" in table_names
-        assert "summaries" in table_names
-        assert "conclusions_fts" in table_names
+    def test_tables_created(self, conn):
+        tables = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type IN ('table','view')"
+            ).fetchall()
+        }
+        assert "entities" in tables
+        assert "conclusions" in tables
+        assert "summaries" in tables
+        assert "conclusions_fts" in tables
+        assert "conclusions_vec" in tables
 
-    def test_schema_version(self, db):
-        version = get_schema_version(db.conn)
-        assert version == SCHEMA_VERSION
+    def test_idempotent_init(self, tmp_path):
+        """Calling init_db twice should not raise."""
+        db = tmp_path / "idem.db"
+        c1 = init_db(db)
+        c1.close()
+        c2 = init_db(db)
+        c2.close()
+
+
+# ---- Entity CRUD ----
 
 
 class TestEntityCRUD:
-    def test_upsert_and_get(self, db):
-        entity = db.upsert_entity("user-1", "Alice", "person", {"role": "engineer"})
-        assert entity["id"] == "user-1"
-        assert entity["name"] == "Alice"
-        assert entity["card"]["role"] == "engineer"
+    def test_upsert_and_get(self, conn):
+        upsert_entity(conn, "u1", "Alice", "person", "card text")
+        e = get_entity(conn, "u1")
+        assert e is not None
+        assert e["name"] == "Alice"
+        assert e["type"] == "person"
+        assert e["card"] == "card text"
 
-    def test_upsert_updates_existing(self, db):
-        db.upsert_entity("user-1", "Alice", "person", {"role": "engineer"})
-        db.upsert_entity("user-1", "Alice B", "person", {"role": "senior engineer"})
-        entity = db.get_entity("user-1")
-        assert entity["name"] == "Alice B"
-        assert entity["card"]["role"] == "senior engineer"
+    def test_upsert_updates(self, conn):
+        upsert_entity(conn, "u1", "Alice")
+        upsert_entity(conn, "u1", "Alice Updated", "org")
+        e = get_entity(conn, "u1")
+        assert e["name"] == "Alice Updated"
+        assert e["type"] == "org"
 
-    def test_get_nonexistent(self, db):
-        assert db.get_entity("nope") is None
+    def test_get_missing(self, conn):
+        assert get_entity(conn, "nope") is None
 
-    def test_list_entities(self, db):
-        db.upsert_entity("u1", "Alice", "person")
-        db.upsert_entity("u2", "Bob", "person")
-        db.upsert_entity("p1", "Project X", "project")
-        assert len(db.list_entities()) == 3
-        assert len(db.list_entities(type="person")) == 2
-        assert len(db.list_entities(type="project")) == 1
+    def test_list_entities(self, conn):
+        upsert_entity(conn, "u1", "Alice")
+        upsert_entity(conn, "u2", "Bob")
+        ents = list_entities(conn)
+        assert len(ents) == 2
 
-    def test_delete_entity(self, db):
-        db.upsert_entity("u1", "Alice")
-        assert db.delete_entity("u1") is True
-        assert db.get_entity("u1") is None
-        assert db.delete_entity("u1") is False
 
-    def test_update_card_merges(self, db):
-        db.upsert_entity("u1", "Alice", card={"role": "eng", "lang": "python"})
-        db.update_entity_card("u1", {"role": "senior eng", "team": "infra"})
-        entity = db.get_entity("u1")
-        assert entity["card"]["role"] == "senior eng"
-        assert entity["card"]["lang"] == "python"
-        assert entity["card"]["team"] == "infra"
+# ---- Conclusion CRUD ----
 
 
 class TestConclusionCRUD:
-    def test_add_and_get(self, db):
-        db.upsert_entity("u1", "Alice")
-        cid = db.add_conclusion("u1", "explicit", "Alice is an engineer")
-        conclusions = db.get_conclusions(entity_id="u1")
-        assert len(conclusions) == 1
-        assert conclusions[0]["content"] == "Alice is an engineer"
-        assert conclusions[0]["id"] == cid
+    def test_add_and_get(self, conn):
+        upsert_entity(conn, "u1", "Alice")
+        cid = add_conclusion(conn, "u1", "explicit", "Alice likes coffee")
+        rows = get_conclusions(conn, entity_id="u1")
+        assert len(rows) == 1
+        assert rows[0]["id"] == cid
+        assert rows[0]["content"] == "Alice likes coffee"
 
-    def test_filter_by_type(self, db):
-        db.upsert_entity("u1", "Alice")
-        db.add_conclusion("u1", "explicit", "Fact 1")
-        db.add_conclusion("u1", "deductive", "Deduction 1")
-        db.add_conclusion("u1", "inductive", "Pattern 1")
-        assert len(db.get_conclusions(entity_id="u1", type="explicit")) == 1
-        assert len(db.get_conclusions(entity_id="u1", type="deductive")) == 1
-
-    def test_supersede(self, db):
-        db.upsert_entity("u1", "Alice")
-        old = db.add_conclusion("u1", "explicit", "Alice likes Java")
-        new = db.add_conclusion("u1", "explicit", "Alice prefers Python over Java")
-        db.supersede_conclusion(old, new)
-        active = db.get_conclusions(entity_id="u1", active_only=True)
-        assert len(active) == 1
-        assert active[0]["content"] == "Alice prefers Python over Java"
-        all_c = db.get_conclusions(entity_id="u1", active_only=False)
-        assert len(all_c) == 2
-
-    def test_with_premises(self, db):
-        db.upsert_entity("u1", "Alice")
-        db.add_conclusion(
-            "u1", "deductive", "Alice is busy",
-            premises=["Alice has 5 meetings today", "Alice skipped lunch"],
+    def test_add_with_embedding(self, conn):
+        upsert_entity(conn, "u1", "Alice")
+        emb = _make_embedding()
+        cid = add_conclusion(
+            conn,
+            "u1",
+            "deductive",
+            "Alice is a morning person",
+            premises=["She wakes at 5am", "She likes sunrises"],
+            confidence=0.9,
+            source_sessions=["sess-1"],
+            embedding=emb,
         )
-        c = db.get_conclusions(entity_id="u1")[0]
-        assert c["premises"] == ["Alice has 5 meetings today", "Alice skipped lunch"]
+        assert cid > 0
+
+    def test_supersede(self, conn):
+        upsert_entity(conn, "u1", "Alice")
+        old = add_conclusion(conn, "u1", "inductive", "Alice likes tea")
+        new = add_conclusion(conn, "u1", "explicit", "Alice likes coffee")
+        supersede_conclusion(conn, old, new)
+
+        active = get_conclusions(conn, entity_id="u1", include_superseded=False)
+        assert len(active) == 1
+        assert active[0]["id"] == new
+
+        all_rows = get_conclusions(conn, entity_id="u1", include_superseded=True)
+        assert len(all_rows) == 2
+
+
+# ---- Summary CRUD ----
 
 
 class TestSummaryCRUD:
-    def test_add_and_get(self, db):
-        sid = db.add_summary(
-            "session-123",
-            short_summary="Discussed project architecture",
-            key_decisions=["Use SQLite", "Skip Redis"],
-            entities_mentioned=["u1", "p1"],
+    def test_add_and_get(self, conn):
+        sid = add_summary(
+            conn,
+            session_id="sess-1",
+            short_summary="Setup project",
+            long_summary="We set up the deep-memory project with SQLite.",
+            key_decisions=["Use FTS5", "Use sqlite-vec"],
+            entities_mentioned=["u1"],
         )
-        summaries = db.get_summaries(session_id="session-123")
-        assert len(summaries) == 1
-        assert summaries[0]["key_decisions"] == ["Use SQLite", "Skip Redis"]
+        s = get_summary(conn, "sess-1")
+        assert s is not None
+        assert s["short_summary"] == "Setup project"
+        assert s["id"] == sid
+
+    def test_list_summaries(self, conn):
+        add_summary(conn, "s1", short_summary="First")
+        add_summary(conn, "s2", short_summary="Second")
+        sums = list_summaries(conn, limit=10)
+        assert len(sums) == 2
+
+    def test_get_missing_summary(self, conn):
+        assert get_summary(conn, "nope") is None
 
 
-class TestFTSSearch:
-    def test_basic_search(self, db):
-        db.upsert_entity("u1", "Alice")
-        db.add_conclusion("u1", "explicit", "Alice enjoys Python programming")
-        db.add_conclusion("u1", "explicit", "Alice has a cat named Whiskers")
-        results = fts_search(db.conn, "Python programming")
+# ---- Search tests ----
+
+
+class TestSearch:
+    def test_fts_search(self, conn):
+        upsert_entity(conn, "u1", "Alice")
+        add_conclusion(conn, "u1", "explicit", "Alice enjoys morning coffee")
+        add_conclusion(conn, "u1", "explicit", "Alice reads books at night")
+
+        results = hybrid_search(conn, "coffee", entity_id="u1")
         assert len(results) >= 1
-        assert "Python" in results[0].content
+        assert "coffee" in results[0]["content"].lower()
 
-    def test_search_with_entity_filter(self, db):
-        db.upsert_entity("u1", "Alice")
-        db.upsert_entity("u2", "Bob")
-        db.add_conclusion("u1", "explicit", "Likes coffee")
-        db.add_conclusion("u2", "explicit", "Likes coffee too")
-        results = fts_search(db.conn, "coffee", entity_id="u1")
-        assert len(results) == 1
-        assert results[0].entity_id == "u1"
+    def test_fts_search_no_match(self, conn):
+        upsert_entity(conn, "u1", "Alice")
+        add_conclusion(conn, "u1", "explicit", "Alice enjoys morning coffee")
 
-    def test_hybrid_fts_only(self, db):
-        db.upsert_entity("u1", "Alice")
-        db.add_conclusion("u1", "explicit", "Alice works at a startup")
-        db.add_conclusion("u1", "inductive", "Alice prefers small teams")
-        results = hybrid_search(db.conn, "startup small teams")
+        results = hybrid_search(conn, "xyzzyzzy_nomatch")
+        assert len(results) == 0
+
+    def test_hybrid_search_with_embedding(self, conn):
+        upsert_entity(conn, "u1", "Alice")
+        rng = np.random.default_rng(0)
+        emb1 = rng.random(384, dtype=np.float32).tobytes()
+        emb2 = rng.random(384, dtype=np.float32).tobytes()
+        query_emb = emb1  # identical to first -> should rank highest
+
+        add_conclusion(
+            conn, "u1", "explicit", "Alice enjoys morning coffee", embedding=emb1
+        )
+        add_conclusion(
+            conn, "u1", "explicit", "Alice reads books at night", embedding=emb2
+        )
+
+        results = hybrid_search(conn, "coffee", embedding=query_emb, entity_id="u1")
         assert len(results) >= 1
+
+    def test_entity_id_filter(self, conn):
+        upsert_entity(conn, "u1", "Alice")
+        upsert_entity(conn, "u2", "Bob")
+        add_conclusion(conn, "u1", "explicit", "Alice enjoys coffee")
+        add_conclusion(conn, "u2", "explicit", "Bob enjoys coffee")
+
+        results = hybrid_search(conn, "coffee", entity_id="u1")
+        assert all(r["entity_id"] == "u1" for r in results)

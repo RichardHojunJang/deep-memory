@@ -1,172 +1,122 @@
-"""Hybrid semantic + FTS5 search for Deep Memory."""
+"""Hybrid search combining FTS5 keyword search and sqlite-vec cosine similarity."""
 
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass, field
 from typing import Any
 
 
-@dataclass
-class SearchResult:
-    """A single search result with combined score."""
-    conclusion_id: int
-    entity_id: str
-    content: str
-    type: str
-    confidence: float
-    fts_score: float = 0.0
-    vec_score: float = 0.0
-    combined_score: float = 0.0
-
-    def to_dict(self) -> dict:
-        return {
-            "id": self.conclusion_id,
-            "entity_id": self.entity_id,
-            "content": self.content,
-            "type": self.type,
-            "confidence": self.confidence,
-            "score": round(self.combined_score, 4),
-        }
-
-
-def _has_vec_table(conn: sqlite3.Connection) -> bool:
-    """Check if the vec0 virtual table exists."""
-    row = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='conclusions_vec'"
-    ).fetchone()
-    return row is not None
-
-
-def fts_search(
+def _fts_search(
     conn: sqlite3.Connection,
     query: str,
     entity_id: str | None = None,
     limit: int = 20,
-) -> list[SearchResult]:
-    """Full-text search using FTS5 BM25 ranking."""
-    # Escape FTS5 special chars
-    safe_query = query.replace('"', '""')
-    fts_expr = f'"{safe_query}"'
-
+) -> list[dict]:
+    """Run an FTS5 keyword search on conclusions_fts and return scored results."""
     sql = """
-        SELECT c.id, c.entity_id, c.content, c.type, c.confidence,
-               rank AS fts_rank
-        FROM conclusions_fts fts
-        JOIN conclusions c ON c.id = fts.rowid
+        SELECT c.*, bm25(conclusions_fts) AS fts_score
+        FROM conclusions_fts f
+        JOIN conclusions c ON c.id = f.rowid
         WHERE conclusions_fts MATCH ?
-          AND c.superseded_by IS NULL
     """
-    params: list[Any] = [fts_expr]
+    params: list[Any] = [query]
 
-    if entity_id:
+    if entity_id is not None:
         sql += " AND c.entity_id = ?"
         params.append(entity_id)
 
-    sql += " ORDER BY rank LIMIT ?"
+    sql += " AND c.superseded_by IS NULL ORDER BY fts_score LIMIT ?"
     params.append(limit)
 
     rows = conn.execute(sql, params).fetchall()
-    results = []
-    for row in rows:
-        r = SearchResult(
-            conclusion_id=row[0],
-            entity_id=row[1],
-            content=row[2],
-            type=row[3],
-            confidence=row[4],
-            fts_score=abs(row[5]),  # BM25 returns negative scores
-        )
-        results.append(r)
-    return results
+    return [dict(r) for r in rows]
 
 
-def vec_search(
+def _vec_search(
     conn: sqlite3.Connection,
-    query_embedding: bytes,
+    embedding: bytes,
     entity_id: str | None = None,
     limit: int = 20,
-) -> list[SearchResult]:
-    """Vector similarity search using sqlite-vec."""
-    if not _has_vec_table(conn):
-        return []
-
+) -> list[dict]:
+    """Run a cosine-similarity search using sqlite-vec on conclusions_vec."""
     sql = """
-        SELECT v.rowid, v.distance,
-               c.entity_id, c.content, c.type, c.confidence
+        SELECT v.conclusion_id, v.distance
         FROM conclusions_vec v
-        JOIN conclusions c ON c.id = v.rowid
-        WHERE v.embedding MATCH ?
-          AND k = ?
-          AND c.superseded_by IS NULL
+        WHERE embedding MATCH ? AND k = ?
     """
-    params: list[Any] = [query_embedding, limit * 2]  # over-fetch for filtering
+    params: list[Any] = [embedding, limit]
 
     rows = conn.execute(sql, params).fetchall()
-    results = []
+    vec_results = []
     for row in rows:
-        if entity_id and row[2] != entity_id:
+        cid = row["conclusion_id"]
+        distance = row["distance"]
+        c = conn.execute("SELECT * FROM conclusions WHERE id = ?", (cid,)).fetchone()
+        if c is None:
             continue
-        r = SearchResult(
-            conclusion_id=row[0],
-            entity_id=row[2],
-            content=row[3],
-            type=row[4],
-            confidence=row[5],
-            vec_score=1.0 - row[1],  # distance → similarity
-        )
-        results.append(r)
-        if len(results) >= limit:
-            break
-    return results
+        if entity_id is not None and c["entity_id"] != entity_id:
+            continue
+        if c["superseded_by"] is not None:
+            continue
+        d = dict(c)
+        d["vec_distance"] = distance
+        vec_results.append(d)
+    return vec_results
 
 
 def hybrid_search(
     conn: sqlite3.Connection,
     query: str,
-    query_embedding: bytes | None = None,
+    embedding: bytes | None = None,
     entity_id: str | None = None,
-    limit: int = 10,
-    fts_weight: float = 0.4,
-    vec_weight: float = 0.6,
-) -> list[SearchResult]:
-    """Combine FTS5 and vector search results with weighted scoring.
-    
-    If query_embedding is None, falls back to FTS-only search.
+    limit: int = 20,
+    fts_weight: float = 0.5,
+    vec_weight: float = 0.5,
+) -> list[dict]:
     """
-    # FTS results
-    fts_results = fts_search(conn, query, entity_id=entity_id, limit=limit * 2)
+    Combine FTS5 keyword search with sqlite-vec cosine similarity.
 
-    # Normalize FTS scores
-    max_fts = max((r.fts_score for r in fts_results), default=1.0) or 1.0
-    for r in fts_results:
-        r.fts_score = r.fts_score / max_fts
+    Returns a ranked list of conclusion dicts with a combined ``score`` key.
+    If no embedding is provided, falls back to FTS-only search.
+    """
+    results_by_id: dict[int, dict] = {}
 
-    # Vector results (if embedding provided)
-    vec_results = []
-    if query_embedding and _has_vec_table(conn):
-        vec_results = vec_search(conn, query_embedding, entity_id=entity_id, limit=limit * 2)
+    # --- FTS5 leg ---
+    fts_results = _fts_search(conn, query, entity_id=entity_id, limit=limit)
+    if fts_results:
+        # bm25 returns negative scores (lower = more relevant), normalise to 0..1
+        min_s = min(r["fts_score"] for r in fts_results)
+        max_s = max(r["fts_score"] for r in fts_results)
+        spread = max_s - min_s if max_s != min_s else 1.0
+        for r in fts_results:
+            norm = 1.0 - ((r["fts_score"] - min_s) / spread)  # higher = better
+            rid = r["id"]
+            entry = dict(r)
+            entry.pop("fts_score", None)
+            entry["_fts"] = norm
+            entry["_vec"] = 0.0
+            results_by_id[rid] = entry
 
-    # Merge by conclusion_id
-    merged: dict[int, SearchResult] = {}
-    for r in fts_results:
-        merged[r.conclusion_id] = r
-    for r in vec_results:
-        if r.conclusion_id in merged:
-            merged[r.conclusion_id].vec_score = r.vec_score
-        else:
-            merged[r.conclusion_id] = r
+    # --- Vector leg ---
+    if embedding is not None:
+        vec_results = _vec_search(conn, embedding, entity_id=entity_id, limit=limit)
+        if vec_results:
+            max_d = max(r["vec_distance"] for r in vec_results) or 1.0
+            for r in vec_results:
+                norm = 1.0 - (r["vec_distance"] / max_d) if max_d else 1.0
+                rid = r["id"]
+                if rid in results_by_id:
+                    results_by_id[rid]["_vec"] = norm
+                else:
+                    entry = dict(r)
+                    entry.pop("vec_distance", None)
+                    entry["_fts"] = 0.0
+                    entry["_vec"] = norm
+                    results_by_id[rid] = entry
 
-    # Compute combined score
-    use_vec = bool(vec_results)
-    for r in merged.values():
-        if use_vec:
-            r.combined_score = (fts_weight * r.fts_score) + (vec_weight * r.vec_score)
-        else:
-            r.combined_score = r.fts_score  # FTS only
-        # Boost by confidence
-        r.combined_score *= r.confidence
+    # --- Combine ---
+    for entry in results_by_id.values():
+        entry["score"] = fts_weight * entry.pop("_fts") + vec_weight * entry.pop("_vec")
 
-    # Sort and limit
-    ranked = sorted(merged.values(), key=lambda r: r.combined_score, reverse=True)
+    ranked = sorted(results_by_id.values(), key=lambda x: x["score"], reverse=True)
     return ranked[:limit]

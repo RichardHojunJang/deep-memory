@@ -1,6 +1,6 @@
-"""Deep Memory storage layer."""
+"""Deep Memory storage layer — SQLite + FTS5 + sqlite-vec."""
 
-from .db import DeepMemoryDB
-from .search import hybrid_search, fts_search, SearchResult
+from .db import init_db, get_connection
+from .search import hybrid_search
 
-__all__ = ["DeepMemoryDB", "hybrid_search", "fts_search", "SearchResult"]
+__all__ = ["init_db", "get_connection", "hybrid_search"]
