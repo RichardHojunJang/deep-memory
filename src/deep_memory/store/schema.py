@@ -2,7 +2,7 @@
 
 import sqlite3
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -85,7 +85,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
     # Try to load sqlite-vec for vector search
     try:
         import sqlite_vec
+        conn.enable_load_extension(True)
         sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
         conn.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS conclusions_vec USING vec0(
                 embedding float[384]

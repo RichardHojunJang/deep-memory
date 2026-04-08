@@ -56,6 +56,14 @@ class DeepMemoryDB:
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
+            # Load sqlite-vec extension for vector search
+            try:
+                import sqlite_vec
+                self._conn.enable_load_extension(True)
+                sqlite_vec.load(self._conn)
+                self._conn.enable_load_extension(False)
+            except Exception:
+                pass
             if get_schema_version(self._conn) < SCHEMA_VERSION:
                 init_schema(self._conn)
         return self._conn
