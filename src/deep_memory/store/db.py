@@ -18,25 +18,20 @@ _embedder = None
 
 
 def get_embedder():
-    """Get or create the global embedder instance."""
+    """Get or create the global embedder instance.
+
+    Defaults to 'auto' which auto-detects the best available backend.
+    Config is read inside auto_detect_backend() so we just pass "auto".
+    """
     global _embedder
     if _embedder is None:
         from deep_memory.embedding import get_embedder as _get_emb
-        # Try to read config for backend preference
-        backend = "none"
+
         try:
-            import os, yaml
-            config_path = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")) / "config.yaml"
-            if config_path.exists():
-                with open(config_path) as f:
-                    cfg = yaml.safe_load(f) or {}
-                backend = cfg.get("deep_memory", {}).get("embedding_backend", "none")
-        except Exception:
-            pass
-        try:
-            _embedder = _get_emb(backend)
+            _embedder = _get_emb("auto")
         except Exception:
             from deep_memory.embedding import NoopEmbedder
+
             _embedder = NoopEmbedder()
     return _embedder
 
@@ -65,7 +60,9 @@ class DeepMemoryDB:
             except Exception:
                 pass
             if get_schema_version(self._conn) < SCHEMA_VERSION:
-                init_schema(self._conn)
+                embedder = get_embedder()
+                dim = getattr(embedder, "dimension", 384)
+                init_schema(self._conn, embedding_dim=dim)
         return self._conn
 
     def close(self) -> None:

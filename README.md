@@ -87,6 +87,30 @@ Once installed, three new tools are available in Hermes:
 
 Post-session reasoning runs automatically via `session_hook.py`, extracting structured conclusions from conversations.
 
+### Embedding Auto-Config
+
+Deep Memory automatically detects the best embedding backend:
+
+1. **Explicit config** — Set `deep_memory.embedding_backend` in `~/.hermes/config.yaml`
+2. **Local** — If `sentence-transformers` is installed, uses `all-MiniLM-L6-v2` (dim=384, no API calls)
+3. **OpenAI** — If `OPENAI_API_KEY` is set, uses `text-embedding-3-small` (dim=1536)
+4. **FTS-only** — Falls back to keyword search if no embedding backend is available
+
+```yaml
+# ~/.hermes/config.yaml (optional — auto-detection works without this)
+deep_memory:
+  embedding_backend: local  # or "openai" or "none"
+```
+
+To check what's available:
+
+```python
+from deep_memory.embedding import diagnose
+print(diagnose())
+# {'sentence_transformers_available': True, 'openai_api_key_set': False,
+#  'sqlite_vec_available': True, 'configured_backend': None, 'auto_detected': 'local'}
+```
+
 ## Development
 
 ```bash
@@ -103,7 +127,7 @@ ruff check src/
 - [x] Phase 3: Entity cards + system prompt injection
 - [x] Phase 4: Hermes integration (tool registry + session hook)
 - [x] Phase 5: Tests + polish (60 tests passing)
-- [ ] Phase 6: Embedding model auto-config
+- [x] Phase 6: Embedding model auto-config
 - [ ] Phase 7: Hermes PR submission
 
 ## License

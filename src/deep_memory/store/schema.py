@@ -1,6 +1,11 @@
 """SQLite schema definitions and migrations for Deep Memory."""
 
+from __future__ import annotations
+
+import logging
 import sqlite3
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 3
 
@@ -77,22 +82,52 @@ END;
 """
 
 
-def init_schema(conn: sqlite3.Connection) -> None:
-    """Create all tables, indexes, FTS, and triggers."""
+def init_schema(conn: sqlite3.Connection, embedding_dim: int = 384) -> None:
+    """Create all tables, indexes, FTS, and triggers.
+
+    Args:
+        conn: SQLite connection.
+        embedding_dim: Dimension for the vec0 embedding column (default 384).
+    """
     conn.executescript(TABLES_SQL)
     conn.executescript(FTS_SQL)
     conn.executescript(FTS_TRIGGERS_SQL)
     # Try to load sqlite-vec for vector search
     try:
         import sqlite_vec
+
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)
         conn.enable_load_extension(False)
-        conn.execute("""
-            CREATE VIRTUAL TABLE IF NOT EXISTS conclusions_vec USING vec0(
-                embedding float[384]
-            )
-        """)
+
+        # Check if vec table already exists with a different dimension
+        try:
+            row = conn.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type='table' AND name='conclusions_vec'"
+            ).fetchone()
+            if row and row[0]:
+                existing_sql = row[0]
+                # Extract dimension from existing CREATE statement
+                import re
+
+                m = re.search(r"float\[(\d+)\]", existing_sql)
+                if m:
+                    existing_dim = int(m.group(1))
+                    if existing_dim != embedding_dim:
+                        logger.warning(
+                            "Vec table exists with dimension %d but embedder "
+                            "uses %d. Drop conclusions_vec to recreate.",
+                            existing_dim,
+                            embedding_dim,
+                        )
+        except Exception:
+            pass
+
+        conn.execute(
+            f"CREATE VIRTUAL TABLE IF NOT EXISTS conclusions_vec "
+            f"USING vec0(embedding float[{embedding_dim}])"
+        )
     except (ImportError, Exception):
         pass  # sqlite-vec not available; vector search disabled
     # Record schema version
