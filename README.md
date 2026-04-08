@@ -128,7 +128,7 @@ ruff check src/
 - [x] Phase 4: Hermes integration (tool registry + session hook)
 - [x] Phase 5: Tests + polish (60 tests passing)
 - [x] Phase 6: Embedding model auto-config
-- [ ] Phase 7: Hermes PR submission
+- [x] Phase 7: Hermes PR submission
 
 ## License
 
