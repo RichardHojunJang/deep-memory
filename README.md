@@ -1,79 +1,105 @@
 # Deep Memory
 
-Honcho-inspired reasoning memory system for [Hermes Agent](https://github.com/plastic-labs/hermes-agent). Built as a native toolset — no external hosting required.
+Deep Memory is a reasoning-oriented memory engine for Hermes Agent. It works **today** as a Hermes toolset/plugin package and is now structured so the same core can later be wired into more native backend/provider hooks when Hermes exposes them.
 
-## Overview
+## What it does
 
-Deep Memory enhances Hermes's memory capabilities by adding:
-- **Structured reasoning** over conversations (explicit → deductive → inductive)
-- **Entity tracking** with evolving profiles (peer cards)
-- **Semantic + keyword hybrid search** via SQLite + FTS5 + sqlite-vec
-- **Automatic post-session reasoning** that extracts insights without manual intervention
+Deep Memory adds four practical capabilities on top of Hermes conversations:
 
-## Architecture
+- **Structured memory extraction** from completed sessions
+- **Entity-centric profiles** that accumulate durable context over time
+- **Recall tools** for semantic/keyword lookup over stored conclusions
+- **A thin integration layer** that keeps Hermes-specific wiring separate from the core engine
 
+## Architecture progression
+
+The package is organized around a simple progression.
+
+### 1) Core engine
+
+The core engine is the host-agnostic part of the package.
+
+```text
+src/deep_memory/store/       SQLite schema, persistence, search
+src/deep_memory/reasoning/   extraction + consolidation pipeline
+src/deep_memory/api/         stable contracts + service facade
+src/deep_memory/tools/       compatibility wrappers built on the service layer
 ```
-~/.hermes/deep_memory/
-└── memory.db              # SQLite (FTS5 + sqlite-vec) — single file, zero hosting
 
+This layer owns the actual memory behavior: entities, conclusions, summaries, reasoning prompts, and recall/search.
+
+### 2) Adapters
+
+The adapter layer is intentionally thin.
+
+```text
+src/deep_memory/adapters/
+├── hermes_tools.py   # bridge to Hermes tool registration
+└── hermes_plugin.py  # bridge to prompt-context / session-hook style integration
+```
+
+Adapters do **not** reimplement the engine. They translate between:
+
+- Deep Memory's stable service/contracts
+- Hermes's current plugin/toolset integration points
+- Future backend/provider service hooks when those become available
+
+### 3) Current Hermes usage: toolset first
+
+Deep Memory is usable right now as a Hermes extension in two ways:
+
+- **Toolset registration** for `recall`, `learn`, and `entities`
+- **Plugin/session-hook style integration** for post-session processing and prompt-context injection
+
+So today's integration story is **toolset/plugin first**, not a tightly embedded backend hook.
+
+### 4) Future backend/provider integration
+
+Longer term, Hermes may expose richer backend/provider hooks for memory-aware prompting, native session events, or direct service registration. This repository is now structured so those hooks can be adopted by extending the adapter layer rather than rewriting the engine.
+
+That future integration is **not** required for Deep Memory to be useful today.
+
+## Repository layout
+
+```text
 src/deep_memory/
-├── store/                 # Data layer (SQLite, embeddings, search)
-│   ├── schema.py          # Table definitions + migrations
-│   ├── db.py              # Connection management
-│   └── search.py          # Hybrid semantic + FTS5 search
-├── reasoning/             # LLM reasoning pipeline
-│   ├── extractor.py       # Post-session insight extraction
-│   ├── consolidator.py    # Contradiction detection + merging
-│   └── prompts.py         # Reasoning prompt templates
-├── tools/                 # Hermes tool definitions
-│   ├── recall.py          # Semantic recall tool
-│   ├── learn.py           # Manual insight storage
-│   └── entities.py        # Entity profile management
-└── __init__.py            # Toolset registration for Hermes
+├── __init__.py
+├── adapters/
+│   ├── __init__.py
+│   ├── hermes_plugin.py
+│   └── hermes_tools.py
+├── api/
+│   ├── __init__.py
+│   ├── contracts.py
+│   └── service.py
+├── embedding.py
+├── hermes_integration.py     # current direct Hermes bridge
+├── reasoning/
+├── runtime.py                # host-agnostic path resolution
+├── session_hook.py           # current session-hook implementation
+├── store/
+└── tools/
 ```
-
-## Data Model
-
-| Table | Purpose | Honcho Equivalent |
-|-------|---------|-------------------|
-| `entities` | People, projects, concepts that persist over time | Peers |
-| `conclusions` | Structured insights with embeddings | Representations |
-| `summaries` | Compressed session digests | Session summaries |
-
-## Hermes Skill Packaging
-
-The Hermes skill instructions for managing this plugin live at:
-
-- `deep-memory-plugin/SKILL.md`
-
-Package that folder (not the repo root) when you want a distributable Hermes skill.
 
 ## Installation
 
-### As a Hermes Agent plugin
+### Local development
 
 ```bash
-# Install into Hermes's venv
-source ~/.hermes/hermes-agent/venv/bin/activate
-pip install -e /path/to/deep-memory
-
-# Add to Hermes model_tools.py _discover_tools():
-#   try:
-#       import deep_memory.hermes_integration
-#   except ImportError:
-#       pass
-
-# Add to Hermes toolsets.py _HERMES_CORE_TOOLS:
-#   "recall", "learn", "entities",
-```
-
-### Standalone
-
-```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-### Optional: Embedding backends
+### Install into a Hermes environment
+
+```bash
+pip install -e /path/to/deep-memory
+```
+
+After installation, Hermes can expose Deep Memory through the current toolset/plugin integration points.
+
+### Optional: embedding backends
 
 ```bash
 # Local embeddings (no API calls)
@@ -85,24 +111,24 @@ pip install sentence-transformers
 #     embedding_backend: openai
 ```
 
-## Usage
+## Usage in Hermes today
 
-Once installed, three new tools are available in Hermes:
+Once registered with Hermes, the package provides:
 
-- **`recall`** — Search deep memory for insights: `recall(query="Python preferences", entity="Richard")`
-- **`learn`** — Store insights: `learn(entity="Richard", insight="Prefers SQLite", type="explicit")`  
-- **`entities`** — Manage profiles: `entities(action="get", name="Richard")`
+- **`recall`** — search stored conclusions and summaries
+- **`learn`** — persist a new insight for an entity
+- **`entities`** — inspect or update entity cards
 
-Post-session reasoning runs automatically via `session_hook.py`, extracting structured conclusions from conversations.
+Post-session extraction can also be triggered through the plugin/session-hook path so completed conversations are turned into durable memory.
 
-### Embedding Auto-Config
+### Embedding auto-config
 
 Deep Memory automatically detects the best embedding backend:
 
-1. **Explicit config** — Set `deep_memory.embedding_backend` in `~/.hermes/config.yaml`
-2. **Local** — If `sentence-transformers` is installed, uses `all-MiniLM-L6-v2` (dim=384, no API calls)
-3. **OpenAI** — If `OPENAI_API_KEY` is set, uses `text-embedding-3-small` (dim=1536)
-4. **FTS-only** — Falls back to keyword search if no embedding backend is available
+1. **Explicit config** — set `deep_memory.embedding_backend` in `~/.hermes/config.yaml`
+2. **Local** — if `sentence-transformers` is installed, use `all-MiniLM-L6-v2` (dim=384, no API calls)
+3. **OpenAI** — if `OPENAI_API_KEY` is set, use `text-embedding-3-small` (dim=1536)
+4. **FTS-only** — fall back to keyword search if no embedding backend is available
 
 ```yaml
 # ~/.hermes/config.yaml (optional — auto-detection works without this)
@@ -110,22 +136,32 @@ deep_memory:
   embedding_backend: local  # or "openai" or "none"
 ```
 
-To check what's available:
+To inspect what's available:
 
 ```python
 from deep_memory.embedding import diagnose
 print(diagnose())
-# {'sentence_transformers_available': True, 'openai_api_key_set': False,
-#  'sqlite_vec_available': True, 'configured_backend': None, 'auto_detected': 'local'}
 ```
 
-## Development
+## Development notes
+
+- Python compatibility target is **3.9+**
+- The adapter layer is intentionally lightweight and defensive
+- Tool wrappers now route through `deep_memory.api.DeepMemoryService`
+- Documentation should stay honest: current value comes from Hermes toolset/plugin integration; deeper native backend hooks are future work
+
+## Tests
+
+Run the focused architecture/service checks:
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-pytest tests/ -q   # 60 tests
-ruff check src/
+pytest tests/test_service_api.py tests/test_adapter_layer.py -q
+```
+
+Or the full suite:
+
+```bash
+pytest tests/ -q
 ```
 
 ## Status
@@ -134,10 +170,11 @@ ruff check src/
 - [x] Phase 2: Reasoning pipeline (extract/consolidate)
 - [x] Phase 3: Entity cards + system prompt injection
 - [x] Phase 4: Hermes integration (tool registry + session hook)
-- [x] Phase 5: Tests + polish (60 tests passing)
+- [x] Phase 5: Tests + polish
 - [x] Phase 6: Embedding model auto-config
-- [x] Phase 7: Hermes PR submission
+- [x] Phase 7: Hermes PR submission groundwork
+- [x] Phase 8: backend-ready service + adapter split
 
 ## License
 
-AGPL-3.0 — same as Hermes Agent.
+AGPL-3.0.
