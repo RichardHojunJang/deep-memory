@@ -40,6 +40,14 @@ src/deep_memory/
 | `conclusions` | Structured insights with embeddings | Representations |
 | `summaries` | Compressed session digests | Session summaries |
 
+## Hermes Skill Packaging
+
+The Hermes skill instructions for managing this plugin live at:
+
+- `deep-memory-plugin/SKILL.md`
+
+Package that folder (not the repo root) when you want a distributable Hermes skill.
+
 ## Installation
 
 ### As a Hermes Agent plugin
