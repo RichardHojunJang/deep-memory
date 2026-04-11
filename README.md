@@ -121,6 +121,30 @@ Once registered with Hermes, the package provides:
 
 Post-session extraction can also be triggered through the plugin/session-hook path so completed conversations are turned into durable memory.
 
+### Adapter API examples
+
+The current public adapter surface is deliberately small and backend-ready.
+
+**Tool registration adapter**
+
+```python
+from deep_memory.adapters import register_with_registry
+
+# Hermes-like registry object
+register_with_registry(registry)
+```
+
+**Prompt/session plugin adapter**
+
+```python
+from deep_memory.adapters import DeepMemorySessionPlugin, build_prompt_context
+
+plugin = DeepMemorySessionPlugin()
+context_block = build_prompt_context(entity_id="richard")
+```
+
+Those helpers keep today's Hermes integration thin while giving future provider hooks a stable seam to target.
+
 ### Embedding auto-config
 
 Deep Memory automatically detects the best embedding backend:

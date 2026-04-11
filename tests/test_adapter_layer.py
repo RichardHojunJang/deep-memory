@@ -1,9 +1,9 @@
 """Tests for the thin Hermes adapter layer."""
-
 from __future__ import annotations
 
 import json
 
+from deep_memory import adapters
 from deep_memory.adapters import hermes_plugin, hermes_tools
 
 
@@ -77,6 +77,34 @@ def test_process_session_messages_invokes_processor_with_keyword_style():
     assert ok is True
     assert received["session_id"] == "session-2"
     assert received["messages"][0]["content"] == "hello"
+
+
+def test_process_session_messages_falls_back_to_positional_processor():
+    received = {}
+
+    def processor(session_id, messages):
+        received["session_id"] = session_id
+        received["messages"] = messages
+
+    ok = hermes_plugin.process_session_messages(
+        "session-2b",
+        [{"role": "user", "content": "fallback"}],
+        processor=processor,
+    )
+    assert ok is True
+    assert received == {
+        "session_id": "session-2b",
+        "messages": [{"role": "user", "content": "fallback"}],
+    }
+
+
+def test_adapters_package_exports_backend_ready_surface():
+    assert adapters.HermesToolAdapter is hermes_tools.HermesToolAdapter
+    assert adapters.iter_tool_adapters is hermes_tools.iter_tool_adapters
+    assert adapters.register_with_registry is hermes_tools.register_with_registry
+    assert adapters.build_prompt_context is hermes_plugin.build_prompt_context
+    assert adapters.DeepMemorySessionPlugin is hermes_plugin.DeepMemorySessionPlugin
+    assert "load_service_api" in adapters.__all__
 
 
 def test_plugin_uses_loader_and_processor():
