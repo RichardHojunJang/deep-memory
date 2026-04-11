@@ -25,6 +25,7 @@ from deep_memory.api.contracts import (
 )
 from deep_memory.runtime import resolve_deep_memory_db_path
 from deep_memory.store import DeepMemoryDB, hybrid_search
+from deep_memory.store import db as db_module
 from deep_memory.store.db import get_embedder
 
 
@@ -32,7 +33,11 @@ class DeepMemoryService:
     """Adapter-friendly facade over Deep Memory storage and search logic."""
 
     def __init__(self, db_path: Optional[Union[str, Path]] = None):
-        self.db_path = resolve_deep_memory_db_path(db_path)
+        self.db_path = (
+            resolve_deep_memory_db_path(db_path)
+            if db_path is not None
+            else db_module.DEFAULT_DB_PATH
+        )
         self._db = DeepMemoryDB(self.db_path)
 
     @property
