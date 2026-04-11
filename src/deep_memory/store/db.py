@@ -6,12 +6,14 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Generator, Optional
+from typing import Any, Generator
 
-from .schema import init_schema, get_schema_version, SCHEMA_VERSION
+from deep_memory.runtime import resolve_deep_memory_db_path
+
+from .schema import SCHEMA_VERSION, get_schema_version, init_schema
 
 
-DEFAULT_DB_PATH = Path.home() / ".hermes" / "deep_memory" / "memory.db"
+DEFAULT_DB_PATH = resolve_deep_memory_db_path()
 
 # Global embedder instance (lazy-loaded)
 _embedder = None
@@ -40,7 +42,7 @@ class DeepMemoryDB:
     """Single-file SQLite store for deep memory."""
 
     def __init__(self, db_path: str | Path | None = None):
-        self.db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
+        self.db_path = resolve_deep_memory_db_path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn: sqlite3.Connection | None = None
 
@@ -54,6 +56,7 @@ class DeepMemoryDB:
             # Load sqlite-vec extension for vector search
             try:
                 import sqlite_vec
+
                 self._conn.enable_load_extension(True)
                 sqlite_vec.load(self._conn)
                 self._conn.enable_load_extension(False)

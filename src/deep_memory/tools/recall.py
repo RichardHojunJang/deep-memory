@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+
+from deep_memory.api import RecallRequest, create_service
 
 
 def recall(query: str, entity: str | None = None, limit: int = 10, task_id: str = None) -> str:
@@ -12,23 +13,9 @@ def recall(query: str, entity: str | None = None, limit: int = 10, task_id: str 
     Uses hybrid FTS5 keyword + sqlite-vec semantic search.
     Returns ranked conclusions as JSON.
     """
-    from deep_memory.store import DeepMemoryDB, hybrid_search
-    from deep_memory.store.db import get_embedder
-
-    db = DeepMemoryDB()
+    service = create_service()
     try:
-        # Generate query embedding for vector search
-        embedder = get_embedder()
-        query_embedding = embedder.embed(query)
-
-        results = hybrid_search(
-            db.conn,
-            query=query,
-            query_embedding=query_embedding,
-            entity_id=entity,
-            limit=limit,
-        )
-
+        results = service.recall(RecallRequest(query=query, entity_id=entity, limit=limit))
         if not results:
             return json.dumps({"results": [], "message": "No matching insights found."})
 
@@ -37,7 +24,7 @@ def recall(query: str, entity: str | None = None, limit: int = 10, task_id: str 
             "total": len(results),
         })
     finally:
-        db.close()
+        service.close()
 
 
 TOOL_SCHEMA = {

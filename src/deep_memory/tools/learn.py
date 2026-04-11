@@ -3,13 +3,8 @@
 from __future__ import annotations
 
 import json
-import re
-from typing import Any
 
-
-def _slugify(name: str) -> str:
-    """Convert a name to a simple entity ID."""
-    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+from deep_memory.api import LearnRequest, create_service
 
 
 def learn(entity: str, insight: str, type: str = "explicit", task_id: str = None) -> str:
@@ -18,38 +13,29 @@ def learn(entity: str, insight: str, type: str = "explicit", task_id: str = None
     Auto-creates the entity if it doesn't exist.
     Valid types: explicit, deductive, inductive, abductive.
     """
-    from deep_memory.store import DeepMemoryDB
-
-    valid_types = ("explicit", "deductive", "inductive", "abductive")
-    if type not in valid_types:
-        return json.dumps({"error": f"Invalid type \'{type}\'. Must be one of: {valid_types}"})
-
-    db = DeepMemoryDB()
+    service = create_service()
     try:
-        entity_id = _slugify(entity)
-
-        # Auto-create entity if it doesn't exist
-        existing = db.get_entity(entity_id)
-        if not existing:
-            db.upsert_entity(entity_id, entity, "person")
-
-        # Store the conclusion
-        conclusion_id = db.add_conclusion(
-            entity_id=entity_id,
-            type=type,
-            content=insight,
+        result = service.learn(
+            LearnRequest(
+                entity=entity,
+                insight=insight,
+                conclusion_type=type,
+            )
         )
-
+        entity_record = result["entity"]
+        conclusion_record = result["conclusion"]
         return json.dumps({
             "stored": True,
-            "conclusion_id": conclusion_id,
-            "entity_id": entity_id,
-            "entity_name": entity,
-            "type": type,
-            "content": insight,
+            "conclusion_id": result["conclusion_id"],
+            "entity_id": entity_record["entity_id"],
+            "entity_name": entity_record["name"],
+            "type": conclusion_record["conclusion_type"],
+            "content": conclusion_record["content"],
         })
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
     finally:
-        db.close()
+        service.close()
 
 
 TOOL_SCHEMA = {

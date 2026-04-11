@@ -3,13 +3,9 @@
 from __future__ import annotations
 
 import json
-import re
-from typing import Any
 
-
-def _slugify(name: str) -> str:
-    """Convert a name to a simple entity ID."""
-    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+from deep_memory.api import EntityQuery, EntityUpdate, EntityUpsert, create_service
+from deep_memory.api.service import DeepMemoryService
 
 
 def entities(action: str, name: str | None = None, card: dict | None = None, task_id: str = None) -> str:
@@ -20,53 +16,40 @@ def entities(action: str, name: str | None = None, card: dict | None = None, tas
     - get: Get entity profile with card and recent conclusions
     - update: Update entity card (biographical info, preferences)
     """
-    from deep_memory.store import DeepMemoryDB
-
-    db = DeepMemoryDB()
+    service = create_service()
     try:
         if action == "list":
-            ents = db.list_entities()
+            ents = service.list_entities()
             return json.dumps({
-                "entities": [
-                    {"id": e["id"], "name": e["name"], "type": e["type"],
-                     "updated_at": e["updated_at"]}
-                    for e in ents
-                ],
+                "entities": [item.to_dict() for item in ents],
                 "total": len(ents),
             })
 
-        elif action == "get":
+        if action == "get":
             if not name:
                 return json.dumps({"error": "Name is required for 'get' action."})
-            entity_id = _slugify(name)
-            entity = db.get_entity(entity_id)
-            if not entity:
-                return json.dumps({"error": f"Entity \'{name}\' not found."})
-            conclusions = db.get_conclusions(entity_id=entity_id, limit=20)
-            return json.dumps({
-                "entity": entity,
-                "conclusions": conclusions,
-                "total_conclusions": len(conclusions),
-            }, default=str)
+            detail = service.get_entity(EntityQuery(name=name, include_conclusions=True, conclusion_limit=20))
+            payload = detail.to_dict()
+            payload["total_conclusions"] = len(detail.conclusions)
+            return json.dumps(payload, default=str)
 
-        elif action == "update":
+        if action == "update":
             if not name:
                 return json.dumps({"error": "Name is required for 'update' action."})
             if not card:
                 return json.dumps({"error": "Card data is required for 'update' action."})
-            entity_id = _slugify(name)
-            existing = db.get_entity(entity_id)
-            if not existing:
-                entity = db.upsert_entity(entity_id, name, card=card)
-            else:
-                entity = db.update_entity_card(entity_id, card)
-            return json.dumps({"updated": True, "entity": entity}, default=str)
+            entity_id = DeepMemoryService.slugify(name)
+            try:
+                entity = service.update_entity(EntityUpdate(entity_id=entity_id, card=card))
+            except KeyError:
+                entity = service.upsert_entity(EntityUpsert(entity_id=entity_id, name=name, card=card))
+            return json.dumps({"updated": True, "entity": entity.to_dict()}, default=str)
 
-        else:
-            return json.dumps({"error": f"Unknown action \'{action}\'. Use: list, get, update"})
-
+        return json.dumps({"error": f"Unknown action '{action}'. Use: list, get, update"})
+    except KeyError:
+        return json.dumps({"error": f"Entity '{name}' not found."})
     finally:
-        db.close()
+        service.close()
 
 
 TOOL_SCHEMA = {
